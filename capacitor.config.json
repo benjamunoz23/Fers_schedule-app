@@ -1,0 +1,9 @@
+{
+  "appId": "com.benjamin.fersmagicschedule",
+  "appName": "Fer's Magic",
+  "webDir": "www",
+  "android": { "backgroundColor": "#FFE4F1" },
+  "plugins": {
+    "LocalNotifications": { "iconColor": "#FF69B4" }
+  }
+}
