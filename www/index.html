@@ -145,6 +145,10 @@
   .notif-box p.title{ margin:0 0 10px; font-weight:700; font-size:12.5px; color:var(--ink); }
   .notif-btn{ width:100%; padding:12px; border:none; border-radius:14px; font-family:'Quicksand', sans-serif; font-weight:700; font-size:14px; color:var(--white); background:linear-gradient(120deg, var(--fucsia), var(--chicle)); cursor:pointer; box-shadow: 0 8px 18px -8px rgba(255,20,147,0.5); }
   .notif-btn:disabled{ opacity:.7; cursor:default; box-shadow:none; }
+  .lead-box{ margin-top:12px; padding:10px 12px; border-radius:14px; background:rgba(255,255,255,0.6); }
+  .lead-title{ margin:0 0 6px; font-family:'Quicksand', sans-serif; font-weight:700; font-size:13px; color:var(--ink-soft); }
+  .lead-opt{ display:flex; align-items:center; gap:10px; padding:7px 0; font-size:14px; font-weight:700; cursor:pointer; }
+  .lead-opt input{ width:20px; height:20px; accent-color:#FF1493; }
   .notif-status{ font-size:12px; color:var(--ink-soft); font-weight:700; margin:9px 0 0; min-height:14px; }
   .warn-note{ font-size:11.3px; color:#B3186F; background:#FFE9F2; border-radius:10px; padding:9px 10px; margin:10px 0 0; line-height:1.55; }
 
@@ -352,6 +356,12 @@
           <p class="title">🔔 Avisos de clases y recordatorios</p>
           <button class="notif-btn" id="notifBtn">Activar notificaciones</button>
           <p class="notif-status" id="notifStatus"></p>
+          <div class="lead-box" id="leadBox">
+            <p class="lead-title">¿Cuándo quieres que te avise?</p>
+            <label class="lead-opt"><input type="checkbox" data-lead="m5"> ⏰ 5 minutos antes</label>
+            <label class="lead-opt"><input type="checkbox" data-lead="h1"> 🕐 1 hora antes</label>
+            <label class="lead-opt"><input type="checkbox" data-lead="w1"> 📅 1 semana antes</label>
+          </div>
           <p class="warn-note">⚠️ <b>Importante:</b> estos avisos son notificaciones locales del navegador — funcionan mientras la app está abierta (o se minimizó hace poco). iOS no permite que una app web avise si lleva mucho rato completamente cerrada, a menos que tenga un servidor propio enviando el aviso (push real). Para que le lleguen bien: que abra la app en la mañana y la deje como pestaña activa, o que la revise cada 1-2 horas durante el día.</p>
         </div>
 
@@ -475,17 +485,22 @@
   ];
 
   const STORAGE_KEY = "fer-magic-schedule-v7";
-  // Monedas iniciales en 0 (sistema real de progreso)
+  // Monedas iniciales: 120 (sistema real de progreso)
   let state = {
-    points: 0,
+    points: 120,
     owned: ["bow", "default-top"],
     equipped: {accessory:"bow", top:"default-top", bottom:null, shoes:null, pet:null},
     checkins: {},
     processedPenalties: [],
     reminders: [],
     notified: {},
-    streakRewardsClaimed: []
+    streakRewardsClaimed: [],
+    leadPrefs: { m5:true, h1:true, w1:false }
   };
+
+  function getLead(){
+    return Object.assign({ m5:true, h1:true, w1:false }, (state && state.leadPrefs) || {});
+  }
 
   function loadState(){
     try{
@@ -1228,24 +1243,34 @@
       }
       const list = [];
       let id = 1;
+      const lead = getLead();
+      const addAt = (date, title, body)=>{
+        if(date.getTime() <= Date.now() + 2000) return;
+        list.push({ id: id++, title, body, channelId: CH_ID, schedule: { at: date, allowWhileIdle: true } });
+      };
       // Clases: se repiten cada semana (Android: domingo = 1 ... sábado = 7)
       Object.keys(SCHEDULE).forEach(d=>{
         SCHEDULE[d].forEach(c=>{
           const start = toMinutes(c.start);
-          [[60, "¡Clase en 1 hora! 💕", HOUR_BEFORE_MSGS], [5, "¡Ya casi! Faltan 5 minutos ⏰", FIVE_MIN_MSGS]].forEach(([before, title, msgs])=>{
-            const t = start - before;
+          const weekly = (t, title, body)=>{
             if(t < 0) return;
-            list.push({ id: id++, title, body: pickMsg(msgs, c), channelId: CH_ID,
+            list.push({ id: id++, title, body, channelId: CH_ID,
               schedule: { on: { weekday: Number(d) + 1, hour: Math.floor(t/60), minute: t % 60 }, allowWhileIdle: true } });
-          });
+          };
+          if(lead.h1) weekly(start - 60, "¡Clase en 1 hora! 💕", pickMsg(HOUR_BEFORE_MSGS, c));
+          if(lead.m5) weekly(start - 5, "¡Ya casi! Faltan 5 minutos ⏰", pickMsg(FIVE_MIN_MSGS, c));
+          if(lead.w1) weekly(start, "Clase en 1 semana 📅", "Dentro de una semana, a esta hora: " + c.name + (c.room ? " (" + c.room + ")" : "") + " 💗");
         });
       });
-      // Recordatorios puntuales (solo futuros y no hechos)
+      // Recordatorios puntuales (solo futuros y no hechos): a la hora exacta + los avisos que ella elija
       (state.reminders || []).forEach(r=>{
         if(r.done) return;
         const dt = new Date(r.date + "T" + r.time + ":00");
-        if(isNaN(dt.getTime()) || dt.getTime() <= Date.now() + 2000) return;
-        list.push({ id: id++, title: "Recordatorio 💌", body: r.title, channelId: CH_ID, schedule: { at: dt, allowWhileIdle: true } });
+        if(isNaN(dt.getTime())) return;
+        addAt(dt, "Recordatorio 💌", r.title);
+        if(lead.w1) addAt(new Date(dt.getTime() - 7*24*3600000), "Recordatorio en 1 semana 📅", r.title);
+        if(lead.h1) addAt(new Date(dt.getTime() - 60*60000), "Recordatorio en 1 hora 🕐", r.title);
+        if(lead.m5) addAt(new Date(dt.getTime() - 5*60000), "Recordatorio en 5 minutos ⏰", r.title);
       });
       if(list.length) await LN.schedule({ notifications: list });
     }catch(e){
@@ -1339,8 +1364,9 @@
       const oneHourBefore = new Date(startDate.getTime() - 60*60000);
       const fiveMinBefore = new Date(startDate.getTime() - 5*60000);
       const keyBase = todayKey(now)+"_"+c.idx;
-      scheduleAt(oneHourBefore, "¡Clase en 1 hora! 💕", pickMsg(HOUR_BEFORE_MSGS, c), keyBase+"_1h");
-      scheduleAt(fiveMinBefore, "¡Ya casi! Faltan 5 minutos ⏰", pickMsg(FIVE_MIN_MSGS, c), keyBase+"_5m");
+      const lead = getLead();
+      if(lead.h1) scheduleAt(oneHourBefore, "¡Clase en 1 hora! 💕", pickMsg(HOUR_BEFORE_MSGS, c), keyBase+"_1h");
+      if(lead.m5) scheduleAt(fiveMinBefore, "¡Ya casi! Faltan 5 minutos ⏰", pickMsg(FIVE_MIN_MSGS, c), keyBase+"_5m");
     });
 
     (state.reminders||[]).forEach(r=>{
@@ -1348,6 +1374,24 @@
       const dt = new Date(r.date+"T"+r.time+":00");
       scheduleAt(dt, "Recordatorio 💌", r.title, "reminder_"+r.id);
     });
+  }
+
+  function setupLeadPrefs(){
+    const lead = getLead();
+    document.querySelectorAll("#leadBox input[data-lead]").forEach(cb=>{
+      cb.checked = !!lead[cb.getAttribute("data-lead")];
+      cb.addEventListener("change", ()=>{
+        state.leadPrefs = getLead();
+        state.leadPrefs[cb.getAttribute("data-lead")] = cb.checked;
+        saveState();
+        scheduleAllNotifications();
+        document.getElementById("toast").textContent = "¡Listo, avisos actualizados! 🔔";
+      });
+    });
+    if(NATIVE){
+      const w = document.querySelector(".notif-box .warn-note");
+      if(w) w.style.display = "none";
+    }
   }
 
   function setupNotifButton(){
@@ -1386,7 +1430,7 @@
       if(!code) return;
       try{
         const parsed = JSON.parse(decodeURIComponent(escape(atob(code))));
-        state = Object.assign({ points:0, owned:[], equipped:{}, checkins:{}, processedPenalties:[], reminders:[], notified:{}, streakRewardsClaimed:[] }, parsed);
+        state = Object.assign({ points:120, owned:[], equipped:{}, checkins:{}, processedPenalties:[], reminders:[], notified:{}, streakRewardsClaimed:[] }, parsed);
         if(!state.reminders) state.reminders = [];
         if(!state.notified) state.notified = {};
         if(!state.streakRewardsClaimed) state.streakRewardsClaimed = [];
@@ -1414,6 +1458,7 @@
     setupBackup();
     setupReminderForm();
     setupNotifButton();
+    setupLeadPrefs();
     setupStreakClaim();
     updateNotifUI();
     registerServiceWorker();
@@ -1423,7 +1468,7 @@
     document.getElementById("resetBtn").addEventListener("click", ()=>{
       if(confirm("¿Reiniciar todo el progreso de Fer?")){
         try{ localStorage.removeItem(STORAGE_KEY); }catch(e){}
-        state = { points: 0, owned: ["bow", "default-top"], equipped: {accessory:"bow", top:"default-top", bottom:null, shoes:null, pet:null}, checkins: {}, processedPenalties: [], reminders: [], notified: {}, streakRewardsClaimed: [] };
+        state = { points: 120, owned: ["bow", "default-top"], equipped: {accessory:"bow", top:"default-top", bottom:null, shoes:null, pet:null}, checkins: {}, processedPenalties: [], reminders: [], notified: {}, streakRewardsClaimed: [] };
         clearScheduledTimers();
         if(NATIVE) scheduleAllNotifications();
         renderStatus(); renderDoll(); renderHome(); renderStore(); renderReminders(); renderStreak(); renderGift();
